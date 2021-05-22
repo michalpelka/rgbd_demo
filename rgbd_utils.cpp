@@ -20,7 +20,9 @@ double rgbd_utils::getSubPix(const cv::Mat& img, double dx, double dy)
     return b;
 }
 
-cv::Mat rgbd_utils::getProjectedImage(const std::shared_ptr<const cv::Mat> &I1, const std::shared_ptr<const cv::Mat> &I2,const std::shared_ptr<const cv::Mat> &D1,
+cv::Mat rgbd_utils::getProjectedImage(const std::shared_ptr<const cv::Mat> &I1,
+                                      const std::shared_ptr<const cv::Mat> &I2,
+                                      const std::shared_ptr<const cv::Mat> &D1,
                           const Eigen::Matrix3d& K, Eigen::Matrix<double, 6,1> params)
 {
     cv::Mat error_map(I1->rows, I1->cols, CV_8U);
@@ -45,6 +47,52 @@ cv::Mat rgbd_utils::getProjectedImage(const std::shared_ptr<const cv::Mat> &I1, 
                 double i2 = (getSubPix(*I2, y, x));
                 error_map.at<uint8_t>(u, v) = i2;
             }
+        }
+    }
+    return error_map;
+}
+
+cv::Mat rgbd_utils::getErrorImageGrid(const std::shared_ptr<const cv::Mat> &I1,
+                                  const std::shared_ptr<const cv::Mat> &I2,
+                      const std::shared_ptr<const cv::Mat> &D1,
+                      const Eigen::Matrix3d& K, Eigen::Matrix<double, 6,1> params)
+{
+    double datai2f[I2->cols*I2->rows];
+    for(int i=0; i<I2->rows; i++) {
+        for (int j = 0; j < I2->cols; j++) {
+            datai2f[i*I2->cols + j ] = I2->at<uint8_t>(i,j);
+        }
+    }
+    ceres::Grid2D<double> gridI2f(datai2f, 0,I2->rows,0, I2->cols);
+    ceres::BiCubicInterpolator<ceres::Grid2D<double>> grid_interpolatorI2f(gridI2f);
+
+    cv::Mat error_map(I1->rows, I1->cols, CV_8U);
+    Sophus::SE3d rotation = Sophus::SE3d::exp(params);
+    const double cx = K(0, 2);
+    const double cy = K(1, 2);
+    const double fx = K(0, 0);
+    const double fy = K(1, 1);
+
+    for (int u = 0; u < D1->rows; u++) {
+        for (int v = 0; v < D1->cols; v++) {
+            error_map.at<uint8_t>(u, v) = 0;
+            double i1 = (I1->at<uint8_t>(int(u), int(v)));
+
+            const double depth = 1.0f*D1->at<uint16_t>(u, v)/kDepthScale;
+            Eigen::Matrix<double, 4, 1> p3d_frame1;
+            p3d_frame1 << (u - cx) / fx * depth, (v - cy) / fy * depth, depth, 1.0;
+
+            const Eigen::Matrix<double, 4, 1> p3d_frame2 = rotation.matrix() * p3d_frame1;
+            const double x = (fx * p3d_frame2[0] / p3d_frame2[2] + cx);
+            const double y = (fy * p3d_frame2[1] / p3d_frame2[2] + cy);
+            //if (x > 0 && y> 0 && y < I2->cols && x< I2->rows) {
+                double i2;
+                gridI2f.GetValue(x,y,&i2);
+                //double i1 = (I1->at<uint8_t>(int(u), int(v)));
+                grid_interpolatorI2f.Evaluate(x,y, &i2, nullptr, nullptr);
+                //double i2 = (getSubPix(*I2, y, x));
+                error_map.at<uint8_t>(u, v) += abs(i1-i2);
+            //}
         }
     }
     return error_map;

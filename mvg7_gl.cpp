@@ -118,7 +118,10 @@ int main(int argc, char **argv) {
     ImGui_ImplGlfw_InitForOpenGL(window, false);
     ImGui_ImplOpenGL3_Init(glsl_version);
 
-    cv::Mat erromap = rgbd_utils::getErrorImage(_I1f, _I2f, _D1f, _Kf, cfg);
+
+
+
+    cv::Mat erromap = rgbd_utils::getErrorImageGrid(_I1f, _I2f, _D1f, _Kf, cfg);
     cv::Mat erromap_jet;
     cv::applyColorMap(erromap, erromap_jet, cv::COLORMAP_JET);
     Texture tex_erromap (erromap_jet);
@@ -207,7 +210,7 @@ int main(int argc, char **argv) {
         if (data_is_dirty)
         {
             data_is_dirty = false;
-            cv::Mat erromap = rgbd_utils::getErrorImage(_I1f, _I2f, _D1f, _Kf, cfg);
+            cv::Mat erromap = rgbd_utils::getErrorImageGrid(_I1f, _I2f, _D1f, _Kf, cfg);
             cv::Mat erromap_jet;
             cv::applyColorMap(erromap, erromap_jet, cv::COLORMAP_JET);
             tex_erromap.update(erromap_jet);
@@ -241,13 +244,23 @@ int main(int argc, char **argv) {
                 const std::shared_ptr<const cv::Mat> _D1 = std::make_shared<const cv::Mat>(pyr1[pyr_level].D);
                 const Eigen::Matrix3d _K = pyr1[pyr_level].K;
 
+                double datai2[_I2->cols*_I2->rows];
+                for(int i=0; i<_I2->rows; i++) {
+                    for (int j = 0; j < _I2->cols; j++) {
+                        datai2[i*_I2->cols + j ] = _I2->at<uint8_t>(i,j);
+                    }
+                }
+                ceres::Grid2D<double> gridI2(datai2, 0,_I2->rows,0, _I2->cols);
+                const auto grid_interpolatorI2= std::make_shared<ceres::BiCubicInterpolator<ceres::Grid2D<double>>>(ceres::BiCubicInterpolator<ceres::Grid2D<double>>(gridI2));
+
                 ceres::Problem problem;
                 problem.AddParameterBlock(cfg.data(), 6, nullptr);
 
                 for (int u = 0; u < _I1->rows; u++) {
                     for (int v = 0; v < _I1->cols; v++) {
-                        auto cost_function = rgbd_utils::PhotometricError::Create(_I1, _I2, _D1, _K, u, v);
-                        ceres::LossFunction *loss = NULL;//new ceres::HuberLoss(1.0);
+                        auto cost_function = rgbd_utils::PhotometricErrorGrid::Create(_I1,grid_interpolatorI2,
+                                                    _D1, _K, u, v);
+                        ceres::LossFunction *loss = new ceres::HuberLoss(1.0);
                         problem.AddResidualBlock(cost_function, loss, cfg.data());
                     }
                 }
